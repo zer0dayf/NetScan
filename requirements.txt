@@ -1,0 +1,14 @@
+# Zorunlu
+scapy
+requests
+beautifulsoup4
+netifaces
+mmh3
+urllib3
+
+# Export
+fpdf2
+
+# Ek keşif modülleri
+pysnmp
+zeroconf
