@@ -131,7 +131,8 @@ def read_existing_tests() -> str:
 # ── AI API ────────────────────────────────────────────────────────────────────
 
 def call_ai(system: str, user: str, temperature: float = 0.2,
-            provider: str | None = None, model: str | None = None) -> str:
+            provider: str | None = None, model: str | None = None,
+            max_tokens: int = 4096) -> str:
     """
     Aktif sağlayıcıya göre AI API'yi çağırır.
     Anthropic SDK veya OpenAI-compatible SDK (DeepSeek, OpenAI) kullanır.
@@ -154,7 +155,7 @@ def call_ai(system: str, user: str, temperature: float = 0.2,
             sys.exit(1)
         client = _ant.Anthropic(api_key=api_key)
         msg    = client.messages.create(
-            model=model, max_tokens=4096, temperature=temperature,
+            model=model, max_tokens=max_tokens, temperature=temperature,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
@@ -171,7 +172,7 @@ def call_ai(system: str, user: str, temperature: float = 0.2,
             kw["base_url"] = cfg["base_url"]
         client = OpenAI(**kw)
         resp   = client.chat.completions.create(
-            model=model, max_tokens=4096, temperature=temperature,
+            model=model, max_tokens=max_tokens, temperature=temperature,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user",   "content": user},
@@ -181,15 +182,20 @@ def call_ai(system: str, user: str, temperature: float = 0.2,
 
 
 def extract_python_block(text: str) -> str:
-    """```python ... ``` bloğunu çıkarır; yoksa tüm metni döner."""
+    """
+    ```python ... ``` bloğunu çıkarır; yoksa tüm metni döner.
+    Kapanış fence'i bulunamazsa (ör. yanıt max_tokens'ta kesildiyse) açılıştan
+    sonraki her şeyi en iyi çaba ile döner — exception fırlatıp pipeline'ı
+    çökertmek yerine.
+    """
     if "```python" in text:
         start = text.index("```python") + len("```python")
-        end   = text.index("```", start)
-        return text[start:end].strip()
+        end   = text.find("```", start)
+        return text[start:end if end != -1 else None].strip()
     if "```" in text:
         start = text.index("```") + 3
-        end   = text.index("```", start)
-        return text[start:end].strip()
+        end   = text.find("```", start)
+        return text[start:end if end != -1 else None].strip()
     return text.strip()
 
 
@@ -234,7 +240,7 @@ def generate_tests(diff: str, source: str, existing_tests: str) -> str:
         Yeni test case'lerini Türkçe değil İngilizce isimlendirme ile,
         ```python ... ``` bloğu içinde döndür.
     """).strip()
-    return call_ai(SYSTEM_TEST_GEN, user)
+    return call_ai(SYSTEM_TEST_GEN, user, max_tokens=8192)
 
 
 # ── Test çalıştırma ───────────────────────────────────────────────────────────
