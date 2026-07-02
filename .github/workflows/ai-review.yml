@@ -9,6 +9,15 @@ on:
     paths:
       - "netscan/**/*.py"
   workflow_dispatch:  # path filtresine takılmadan elle tetiklemek için
+    inputs:
+      base_ref:
+        description: "Diff base referansı (boş bırakılırsa HEAD~1)"
+        required: false
+        default: ""
+      head_ref:
+        description: "Diff head referansı (boş bırakılırsa HEAD)"
+        required: false
+        default: ""
 
 # PR yorumu yazabilmek için yazma yetkisi
 permissions:
@@ -46,6 +55,9 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "base=${{ github.event.pull_request.base.sha }}" >> $GITHUB_OUTPUT
             echo "head=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.event.inputs.base_ref }}" ]; then
+            echo "base=${{ github.event.inputs.base_ref }}" >> $GITHUB_OUTPUT
+            echo "head=${{ github.event.inputs.head_ref || 'HEAD' }}" >> $GITHUB_OUTPUT
           else
             echo "base=HEAD~1" >> $GITHUB_OUTPUT
             echo "head=HEAD"   >> $GITHUB_OUTPUT
