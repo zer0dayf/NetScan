@@ -256,7 +256,13 @@ def run_pytest(test_file: Path) -> tuple[int, str]:
 
 
 def parse_failures(output: str) -> list[dict]:
-    """pytest çıktısından başarısız test bilgilerini çıkarır."""
+    """
+    pytest çıktısının 'short test summary info' bölümündeki
+    'FAILED path::test - HataTürü: mesaj' satırlarından başarısız test
+    bilgilerini çıkarır. Hata mesajı aynı satırda (' - ' sonrası) geldiği için
+    onu da yakalıyoruz; aksi halde classify_failure boş bir hata metniyle
+    çalışırdı.
+    """
     failures = []
     lines    = output.splitlines()
     current: dict | None = None
@@ -265,8 +271,11 @@ def parse_failures(output: str) -> list[dict]:
         if line.startswith("FAILED "):
             if current:
                 failures.append(current)
-            current = {"name": line.split(" ")[1], "error": []}
-        elif current and line.strip():
+            rest = line[len("FAILED "):]
+            name, _, brief = rest.partition(" - ")
+            current = {"name": name.strip(), "error": [brief] if brief else []}
+        elif current and line.strip() and not line.startswith("="):
+            # "===== N failed, M passed ====" gibi özet satırlarını hariç tut
             current["error"].append(line)
 
     if current:
@@ -290,7 +299,6 @@ SYSTEM_CLASSIFY = textwrap.dedent("""
       "classification": "false_positive" | "true_positive",
       "confidence": 0.0-1.0,
       "reason": "kısa açıklama",
-      "fixed_test": "düzeltilmiş test kodu (sadece false_positive ise)",
       "bug_description": "bug açıklaması (sadece true_positive ise)"
     }
 """).strip()
@@ -336,6 +344,55 @@ def classify_failure(failure: dict, source: str, test_code: str) -> dict:
             "reason": "JSON ayrıştırma hatası",
             "raw": raw,
         }
+
+
+# ── False positive düzeltmesi (tam dosya) ──────────────────────────────────────
+
+SYSTEM_FIX_FILE = textwrap.dedent("""
+    Sen bir senior Python test mühendisisin. Elindeki pytest test dosyasında
+    bazı testler false positive olarak işaretlendi — yani testin kendisi yanlış
+    yazılmış (yanlış import, yanlış mock hedefi, gerçekçi olmayan assertion vb.),
+    kaynak koddaki fonksiyonlar doğru çalışıyor.
+
+    KURALLAR:
+    - SADECE listelenen başarısız testleri düzelt
+    - Zaten geçen diğer testlere DOKUNMA, aynen koru
+    - Dönen dosya baştan sona geçerli, tek parça, collectlenebilir bir Python
+      dosyası olmalı — parça/snippet değil, TÜM dosya
+    - Gerekli tüm import'lar dosyanın başında tek sefer bulunmalı
+    - SADECE geçerli Python kodu döndür, açıklama metni yazma
+""").strip()
+
+
+def fix_test_file(test_code: str, failures: list[dict], source: str) -> str:
+    """
+    Verilen false-positive başarısızlıkları, orijinal test dosyasının TAMAMI
+    bağlamında düzeltir ve tam, geçerli bir dosya olarak geri döner.
+    İzole düzeltme parçalarını elle birleştirmekten (kırılgan) kaçınmak için
+    tek bir AI çağrısıyla bütün dosyayı yeniden ürettiriyoruz.
+    """
+    failure_summary = "\n\n".join(
+        f"### {f['name']}\n" + "\n".join(f["error"][:15])
+        for f in failures
+    )
+    user = textwrap.dedent(f"""
+        ## MEVCUT TEST DOSYASI (TAMAMI)
+        ```python
+        {test_code}
+        ```
+
+        ## FALSE POSITIVE OLARAK İŞARETLENEN BAŞARISIZ TESTLER VE HATALARI
+        {failure_summary}
+
+        ## KAYNAK KOD (referans için)
+        ```python
+        {source[:6000]}
+        ```
+
+        Yukarıdaki dosyada sadece listelenen testleri düzelt, geri kalanı aynen
+        koru. Düzeltilmiş TAM dosyayı ```python ... ``` bloğu içinde döndür.
+    """).strip()
+    return call_ai(SYSTEM_FIX_FILE, user, max_tokens=8192)
 
 
 # ── Bug raporu ────────────────────────────────────────────────────────────────
@@ -455,8 +512,8 @@ def main() -> int:
 
     print(f"\n🔎 {len(failures)} başarısız test analiz ediliyor...")
 
-    true_positives  = []
-    fixed_tests     = []
+    true_positives           = []
+    false_positive_failures  = []
 
     for failure in failures:
         print(f"   → {failure['name']}")
@@ -466,27 +523,31 @@ def main() -> int:
         print(f"     Sınıflandırma: {cls} (güven: {conf:.0%})")
 
         if cls == "false_positive":
-            fixed = analysis.get("fixed_test", "")
-            if fixed:
-                fixed_tests.append(fixed)
-                print("     ✅ Claude testi düzeltti.")
-            else:
-                print("     ⚠️  Düzeltme alınamadı.")
+            false_positive_failures.append(failure)
+            print("     ⚠️  Test hatası (false positive) — dosya toplu düzeltilecek.")
 
         elif cls == "true_positive":
             true_positives.append({"failure": failure, "analysis": analysis})
             print(f"     🐛 Gerçek bug: {analysis.get('bug_description','')[:80]}")
 
-    # ── 6. Düzeltilmiş testleri uygula ve tekrar çalıştır ────────────────────
-    if fixed_tests:
-        fixed_code = "\n\n".join(fixed_tests)
-        test_file.write_text(header + "\n\n" + fixed_code, encoding="utf-8")
-        print("\n🔁 Düzeltilmiş testler çalışıyor...")
-        rc2, out2 = run_pytest(test_file)
-        print(out2)
-        if rc2 == 0:
-            print("✅ Düzeltme sonrası tüm testler geçti.")
-            return 0
+    # ── 6. False positive'ler varsa TÜM dosyayı tek seferde düzelt ────────────
+    # Not: true_positive'lerin testleri burada dokunulmadan dosyada kalır, bu
+    # yüzden aşağıdaki rerun gerçek bir bug'ı asla "geçti" gibi göstermez.
+    if false_positive_failures:
+        print(f"\n🔁 {len(false_positive_failures)} false positive test düzeltiliyor (tam dosya)...")
+        fixed_raw  = fix_test_file(test_code, false_positive_failures, source)
+        fixed_code = extract_python_block(fixed_raw)
+
+        if fixed_code and "def test_" in fixed_code:
+            test_file.write_text(header + "\n\n" + fixed_code, encoding="utf-8")
+            rc2, out2 = run_pytest(test_file)
+            print(out2)
+            if rc2 == 0:
+                print("✅ Düzeltme sonrası tüm testler geçti.")
+                return 0
+            print("⚠️  Düzeltme sonrası hâlâ başarısız test(ler) var — devam ediliyor.")
+        else:
+            print("⚠️  Düzeltilmiş dosya alınamadı, orijinal dosya korunuyor.")
 
     # ── 7. True positive bug'ları raporla ────────────────────────────────────
     if true_positives:
