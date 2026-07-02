@@ -90,8 +90,10 @@ def _load_mac_vendor_db() -> None:
             break
 
 
-def get_mac_vendor(mac: str) -> str:
+def get_mac_vendor(mac: str | None) -> str:
     """MAC adresinden üretici adını döner. 24/28/36-bit OUI uzunluk önceliğiyle arar."""
+    if not mac:
+        return "N/A (Dış Ağ)"
     _load_mac_vendor_db()
     full = mac.replace(":", "").replace("-", "").upper()
     for length in (9, 7, 6):  # MA-S → MA-M → MA-L

@@ -54,7 +54,7 @@ def export_txt(all_results: list, path: str) -> None:
             model = dev.get("device_model", "")
             os_h  = dev.get("os_hint") or dev.get("dhcp_os") or ""
             row   = (
-                f"\n  IP: {dev['ip']:<15}  MAC: {dev['mac']}  "
+                f"\n  IP: {dev['ip']:<15}  MAC: {dev['mac'] or 'N/A'}  "
                 f"Üretici: {dev['vendor']}"
             )
             if host:  row += f"  Host: {host}"
@@ -71,6 +71,8 @@ def export_txt(all_results: list, path: str) -> None:
                         f"  {label}: {name} / {d.get('manufacturer','')} "
                         f"{d.get('model','')}".rstrip()
                     )
+                    if d.get("internal_ips"):
+                        lines.append(f"    İç IP Sızıntısı (Port Mapping): {', '.join(d['internal_ips'])}")
 
             if dev.get("ipp"):
                 printers = ", ".join(dev["ipp"].get("printers", []))
@@ -86,6 +88,8 @@ def export_txt(all_results: list, path: str) -> None:
 
             if dev.get("snmp"):
                 lines.append(f"  SNMP: {dev['snmp'].get('description','')[:80]}")
+                if dev["snmp"].get("arp_table"):
+                    lines.append(f"    İç IP Sızıntısı (ARP Tablosu): {', '.join(dev['snmp']['arp_table'])}")
 
             for svc in dev.get("ports", []):
                 t = svc["type"]
@@ -102,6 +106,8 @@ def export_txt(all_results: list, path: str) -> None:
                     lines.append(f"      Sunucu: {w['server']}")
                     if w.get("hash"):
                         lines.append(f"      Fav Hash: {w['hash']}")
+                    if w.get("internal_ip_leak"):
+                        lines.append(f"      İç IP Sızıntısı: {', '.join(w['internal_ip_leak'])}")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -169,7 +175,7 @@ def export_pdf(all_results: list, path: str) -> None:
             pdf.set_font(B, "B", 11)
             pdf.set_fill_color(210, 225, 245)
             pdf.cell(0, 8,
-                f"  IP: {s(dev['ip'])}   MAC: {s(dev['mac'])}   "
+                f"  IP: {s(dev['ip'])}   MAC: {s(dev['mac'] or 'N/A')}   "
                 f"Uretici: {s(dev['vendor'])}",
                 ln=True, fill=True)
             pdf.set_font(R, size=10)
@@ -189,6 +195,9 @@ def export_pdf(all_results: list, path: str) -> None:
                         f"{label}: {s(name)} / {s(d.get('manufacturer',''))} "
                         f"{s(d.get('model',''))}",
                         ln=True)
+                    if d.get("internal_ips"):
+                        pdf.cell(20)
+                        pdf.cell(0, 5, f"Ic IP Sizintisi: {s(', '.join(d['internal_ips']))}", ln=True)
 
             if dev.get("ipp"):
                 printers = ", ".join(dev["ipp"].get("printers", []))
@@ -199,6 +208,9 @@ def export_pdf(all_results: list, path: str) -> None:
                 pdf.cell(10)
                 pdf.cell(0, 5,
                     f"SNMP: {s(dev['snmp'].get('description',''))[:70]}", ln=True)
+                if dev["snmp"].get("arp_table"):
+                    pdf.cell(20)
+                    pdf.cell(0, 5, f"Ic IP Sizintisi: {s(', '.join(dev['snmp']['arp_table']))}", ln=True)
 
             for svc in dev.get("ports", []):
                 pdf.cell(10)
@@ -223,6 +235,9 @@ def export_pdf(all_results: list, path: str) -> None:
                     if w.get("hash"):
                         pdf.cell(20)
                         pdf.cell(0, 5, f"Fav Hash: {w['hash']}", ln=True)
+                    if w.get("internal_ip_leak"):
+                        pdf.cell(20)
+                        pdf.cell(0, 5, f"Ic IP Sizintisi: {s(', '.join(w['internal_ip_leak']))}", ln=True)
             pdf.ln(3)
         pdf.ln(4)
 

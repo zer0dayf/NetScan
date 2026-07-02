@@ -18,7 +18,7 @@ def print_device(r: dict) -> None:
     model = r.get("device_model") or ""
     os_h  = r.get("os_hint") or r.get("dhcp_os") or ""
 
-    parts = [f"IP: {r['ip']:<15}", f"MAC: {r['mac']}", f"Üretici: {r['vendor']}"]
+    parts = [f"IP: {r['ip']:<15}", f"MAC: {r['mac'] or 'N/A'}", f"Üretici: {r['vendor']}"]
     if host:  parts.append(f"Host: {host}")
     if model: parts.append(f"Model: {model}")
     if os_h:  parts.append(f"OS: {os_h}")
@@ -28,6 +28,8 @@ def print_device(r: dict) -> None:
         u = r["upnp"]
         print(f"     🔊 UPnP : {u.get('friendly_name','')} | "
               f"{u.get('manufacturer','')} {u.get('model','')}".rstrip())
+        if u.get("internal_ips"):
+            print(f"        🔓 Port Mapping ile Görülen İç IP'ler: {', '.join(u['internal_ips'])}")
 
     if r.get("cast"):
         c = r["cast"]
@@ -59,6 +61,9 @@ def print_device(r: dict) -> None:
         desc = sn.get("description", "")[:70]
         loc  = sn.get("location", "")
         print(f"     🔧 SNMP : {desc}" + (f" | Konum: {loc}" if loc else ""))
+        if sn.get("arp_table"):
+            print(f"        🔓 ARP Tablosunda Görülen İç IP'ler ({len(sn['arp_table'])}): "
+                  f"{', '.join(sn['arp_table'][:10])}" + (" ..." if len(sn['arp_table']) > 10 else ""))
 
     for svc in r.get("ports", []):
         t = svc["type"]
@@ -78,3 +83,5 @@ def print_device(r: dict) -> None:
             print(f"        🔹 Sunucu : {w['server']}")
             if w.get("hash"):
                 print(f"        🔹 Fav    : {w['hash']}")
+            if w.get("internal_ip_leak"):
+                print(f"        🔓 İç IP Sızıntısı: {', '.join(w['internal_ip_leak'])}")

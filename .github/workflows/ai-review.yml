@@ -118,9 +118,25 @@ jobs:
             });
             console.log('Bug issue created.');
 
-      # ── Pipeline başarısızsa workflow'u da başarısız say ───────────────────
+      # ── Pipeline gerçek bir bug bulduysa workflow'u başarısız say ──────────
+      # NOT: steps.ai-pipeline.outcome == 'failure' tek başına yeterli değil —
+      # eksik API key, rate limit veya ağ hatası gibi altyapısal nedenlerle de
+      # script exit(1) ile dönebilir. bug_report.md sadece gerçek (true positive)
+      # bug bulunduğunda yazılıyor, o yüzden asıl sinyal bu.
       - name: Fail if true positive bug found
-        if: steps.ai-pipeline.outcome == 'failure'
+        if: |
+          steps.ai-pipeline.outcome == 'failure' &&
+          hashFiles('bug_report.md') != ''
         run: |
           echo "❌ AI test pipeline gerçek bir bug tespit etti."
+          exit 1
+
+      - name: Fail if pipeline errored for infrastructure reasons
+        if: |
+          steps.ai-pipeline.outcome == 'failure' &&
+          hashFiles('bug_report.md') == ''
+        run: |
+          echo "⚠️  AI test pipeline hata verdi ama gerçek bir bug raporu yok."
+          echo "   Muhtemel neden: eksik/geçersiz API key, rate limit veya ağ hatası."
+          echo "   Detay için 'Run AI Test Pipeline' adımının loguna bak."
           exit 1

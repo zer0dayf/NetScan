@@ -44,7 +44,7 @@ def scan_device(
 
     Dönen sözlük, output ve export modülleri tarafından kullanılır.
     """
-    ip, mac = device["ip"], device["mac"]
+    ip, mac = device["ip"], device.get("mac")
 
     # ── Aşama 1: Port taraması ────────────────────────────────────────────────
     port_results: list[dict] = []
@@ -79,7 +79,7 @@ def scan_device(
         roku_info = f_roku.result() if f_roku else None
 
     # ── DHCP verisi ───────────────────────────────────────────────────────────
-    dhcp_data = (dhcp_map or {}).get(mac.lower(), {})
+    dhcp_data = (dhcp_map or {}).get(mac.lower(), {}) if mac else {}
 
     # ── Cihaz modeli (öncelik sırası) ─────────────────────────────────────────
     mdns_data    = (mdns_map or {}).get(ip, [])

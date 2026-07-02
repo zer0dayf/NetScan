@@ -65,6 +65,18 @@ DEFAULT_PORTS: list[int] = [
     51832,  # WireGuard UI alt
 ]
 
+# Dış ağ TCP SYN ping'i için yaygın portlar (host discovery amaçlı)
+EXTERNAL_PING_PORTS: list[int] = [
+    80, 443, 22, 21, 25, 3389, 8080, 53, 110, 143, 445, 3306, 8443, 5900,
+]
+
+# Dış ağ CIDR taramasında güvenlik/tamamlanabilirlik sınırı
+MAX_EXTERNAL_HOSTS = 256
+
+# UPnP-IGD port mapping enumerasyonunda ve SNMP ARP tablosu walk'ında sınır
+MAX_PORT_MAPPING_ENTRIES = 32
+MAX_SNMP_ARP_ENTRIES     = 64
+
 MDNS_SERVICE_TYPES: list[str] = [
     "_http._tcp.local.",
     "_https._tcp.local.",

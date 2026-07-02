@@ -9,11 +9,14 @@ import socket
 import threading
 import time
 import xml.etree.ElementTree as ET
+from urllib.parse import urljoin
 
 import requests
 from scapy.all import BOOTP, DHCP, sniff
 
-from .constants import APPLE_MODELS, MDNS_SERVICE_TYPES
+from .constants import (
+    APPLE_MODELS, MAX_PORT_MAPPING_ENTRIES, MAX_SNMP_ARP_ENTRIES, MDNS_SERVICE_TYPES,
+)
 from .vendor import get_mac_vendor, _load_mac_vendor_db
 
 # ── Opsiyonel: zeroconf (mDNS) ───────────────────────────────────────────────
@@ -30,7 +33,7 @@ except ImportError:
 try:
     from pysnmp.hlapi import (
         CommunityData, ContextData, ObjectIdentity, ObjectType,
-        SnmpEngine, UdpTransportTarget, getCmd,
+        SnmpEngine, UdpTransportTarget, getCmd, nextCmd,
     )
     SNMP_AVAILABLE = True
 except ImportError:
@@ -199,6 +202,73 @@ def ssdp_scan(timeout: int = 3) -> dict:
     return discovered
 
 
+def _find_igd_control_url(root: ET.Element, ns: str) -> tuple[str, str] | None:
+    """WANIPConnection/WANPPPConnection servisinin (serviceType, controlURL) çiftini bulur."""
+    for svc in root.iter(f"{{{ns}}}service"):
+        st_el = svc.find(f"{{{ns}}}serviceType")
+        cu_el = svc.find(f"{{{ns}}}controlURL")
+        if st_el is None or cu_el is None or not st_el.text or not cu_el.text:
+            continue
+        st = st_el.text.strip()
+        if "WANIPConnection" in st or "WANPPPConnection" in st:
+            return st, cu_el.text.strip()
+    return None
+
+
+def _igd_port_mappings(location_url: str, root: ET.Element, ns: str) -> list[dict]:
+    """
+    UPnP IGD'nin GetGenericPortMappingEntry (salt okunur) aksiyonunu sırayla çağırarak
+    yönlendirilmiş port haritasını (ve dolayısıyla iç ağ istemci IP'lerini) döner.
+    Sadece okuma yapar — port ekleme/silme denemez.
+    """
+    found = _find_igd_control_url(root, ns)
+    if not found:
+        return []
+    service_type, control_path = found
+    control_url = urljoin(location_url, control_path)
+
+    mappings: list[dict] = []
+    for idx in range(MAX_PORT_MAPPING_ENTRIES):
+        body = (
+            '<?xml version="1.0"?>'
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+            f'<s:Body><u:GetGenericPortMappingEntry xmlns:u="{service_type}">'
+            f'<NewPortMappingIndex>{idx}</NewPortMappingIndex>'
+            '</u:GetGenericPortMappingEntry></s:Body></s:Envelope>'
+        )
+        headers = {
+            "Content-Type": 'text/xml; charset="utf-8"',
+            "SOAPAction":   f'"{service_type}#GetGenericPortMappingEntry"',
+        }
+        try:
+            resp = requests.post(control_url, data=body, headers=headers, timeout=2, verify=False)
+        except Exception:
+            break
+        if resp.status_code != 200:
+            break  # SOAP Fault → index sona erdi
+
+        try:
+            entry = ET.fromstring(resp.content)
+        except ET.ParseError:
+            break
+
+        def find_text(tag: str) -> str | None:
+            el = entry.find(f".//{tag}")
+            return el.text.strip() if el is not None and el.text else None
+
+        internal_client = find_text("NewInternalClient")
+        if not internal_client:
+            break
+        mappings.append({
+            "external_port":   find_text("NewExternalPort"),
+            "internal_client": internal_client,
+            "internal_port":   find_text("NewInternalPort"),
+            "protocol":        find_text("NewProtocol"),
+        })
+    return mappings
+
+
 def _fetch_upnp_info(location_url: str) -> dict:
     try:
         resp = requests.get(location_url, timeout=2, verify=False)
@@ -212,13 +282,24 @@ def _fetch_upnp_info(location_url: str) -> dict:
             el = dev.find(f"{{{ns}}}{tag}")
             return el.text.strip() if el is not None and el.text else None
 
-        return {k: v for k, v in {
+        info = {k: v for k, v in {
             "friendly_name": g("friendlyName"),
             "manufacturer":  g("manufacturer"),
             "model":         g("modelName"),
             "model_desc":    g("modelDescription"),
             "serial":        g("serialNumber"),
         }.items() if v}
+
+        try:
+            mappings = _igd_port_mappings(location_url, root, ns)
+        except Exception:
+            mappings = []
+        if mappings:
+            info["port_mappings"] = mappings
+            info["internal_ips"]  = sorted({
+                m["internal_client"] for m in mappings if m.get("internal_client")
+            })
+        return info
     except Exception:
         return {}
 
@@ -342,6 +423,38 @@ _SNMP_OIDS = {
     "uptime":      "1.3.6.1.2.1.1.3.0",
 }
 
+_SNMP_ARP_TABLE_OID = "1.3.6.1.2.1.4.22.1.3"  # ipNetToMediaNetAddress
+
+
+def snmp_arp_table(ip: str, community: str = "public", timeout: int = 1) -> list[str]:
+    """
+    SNMP ARP tablosunu (ipNetToMediaNetAddress) walk ederek cihazın gördüğü
+    iç ağ IP'lerini döner. Salt okuma — sadece mevcut bir OID'i sorgular.
+    """
+    if not SNMP_AVAILABLE:
+        return []
+    ips: list[str] = []
+    try:
+        for err_ind, err_status, _, var_binds in nextCmd(
+            SnmpEngine(),
+            CommunityData(community, mpModel=0),
+            UdpTransportTarget((ip, 161), timeout=timeout, retries=0),
+            ContextData(),
+            ObjectType(ObjectIdentity(_SNMP_ARP_TABLE_OID)),
+            lexicographicMode=False,
+        ):
+            if err_ind or err_status:
+                break
+            for _, val in var_binds:
+                addr = str(val).strip()
+                if addr and addr not in ips:
+                    ips.append(addr)
+            if len(ips) >= MAX_SNMP_ARP_ENTRIES:
+                break
+    except Exception:
+        pass
+    return ips
+
 
 def snmp_query(ip: str, community: str = "public", timeout: int = 1) -> dict | None:
     if not SNMP_AVAILABLE:
@@ -365,4 +478,9 @@ def snmp_query(ip: str, community: str = "public", timeout: int = 1) -> dict | N
                         result[key] = val
     except Exception:
         pass
+
+    arp = snmp_arp_table(ip, community, timeout)
+    if arp:
+        result["arp_table"] = arp
+
     return result or None

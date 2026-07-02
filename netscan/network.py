@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 
 import netifaces
@@ -58,11 +59,35 @@ def scan_subnet(ip_range: str, iface: str) -> list[dict]:
     """
     pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip_range)
     try:
-        kw: dict = {"timeout": 2, "verbose": 0}
+        kw: dict = {"timeout": 3, "retry": 2, "verbose": 0}
         if "fallback" not in iface:
             kw["iface"] = iface
         answered = srp(pkt, **kw)[0]
-        devices  = [{"ip": r.psrc, "mac": r.hwsrc} for _, r in answered]
-        return sorted(devices, key=lambda x: socket.inet_aton(x["ip"]))
+        devices  = {r.hwsrc: {"ip": r.psrc, "mac": r.hwsrc} for _, r in answered}
+        return sorted(devices.values(), key=lambda x: socket.inet_aton(x["ip"]))
     except Exception:
         return []
+
+
+def resolve_scan_target(target: str) -> tuple[bool, str | None, str]:
+    """
+    --target argümanının iç ağ mı dış ağ mı olduğunu belirler.
+
+    (is_local, iface, target) döner:
+    - is_local=True  → target yerel bir arayüze ait bir CIDR/IP, ARP ile taranır.
+    - is_local=False → target bir domain veya yerel olmayan bir IP/CIDR, dış ağ
+      host discovery akışına yönlendirilir. iface bu durumda None'dır.
+    """
+    try:
+        target_net = ipaddress.ip_network(target, strict=False)
+    except ValueError:
+        return False, None, target  # domain adı
+
+    for iface, cidr in get_local_subnets():
+        try:
+            if target_net.subnet_of(ipaddress.ip_network(cidr, strict=False)):
+                return True, iface, target
+        except (ValueError, TypeError):
+            continue
+
+    return False, None, target  # yerel olmayan IP/CIDR

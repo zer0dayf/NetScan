@@ -7,6 +7,8 @@ Google Cast, WSD, IPP, Roku.
 from __future__ import annotations
 
 import codecs
+import ipaddress
+import re
 import socket
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin
@@ -17,6 +19,27 @@ from bs4 import BeautifulSoup
 from scapy.all import ICMP, IP, TCP, sr1
 
 from .constants import FAVICON_HASHES, HTML_SIGNATURES, TITLE_SIGNATURES
+
+# ── İç Ağ IP Sızıntısı ────────────────────────────────────────────────────────
+
+_IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
+
+
+def _extract_internal_ips(text: str, exclude: str | None = None) -> list[str]:
+    """
+    Metin içinde geçen RFC1918 (özel) IP adreslerini bulur.
+    Dış ağ hedeflerinde HTTP header/body'de sızan iç IP'leri (X-Forwarded-For,
+    hata sayfaları, misconfigured proxy vb.) yakalamak için kullanılır.
+    """
+    found: set[str] = set()
+    for candidate in _IPV4_RE.findall(text):
+        try:
+            ip = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if ip.is_private and not ip.is_loopback and candidate != exclude:
+            found.add(candidate)
+    return sorted(found)
 
 
 # ── OS Tespiti ────────────────────────────────────────────────────────────────
@@ -173,7 +196,10 @@ def http_fingerprinting(ip: str, port: int) -> dict | None:
             except Exception:
                 pass
 
-            return {
+            header_blob = "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+            leaked_ips  = _extract_internal_ips(header_blob + "\n" + resp.text[:20_000], exclude=ip)
+
+            result = {
                 "port":          port,
                 "protocol":      proto.upper(),
                 "title":         title,
@@ -181,6 +207,9 @@ def http_fingerprinting(ip: str, port: int) -> dict | None:
                 "hash":          fav_hash,
                 "identified_as": detected or "Bilinmeyen Web Uygulaması",
             }
+            if leaked_ips:
+                result["internal_ip_leak"] = leaked_ips
+            return result
         except Exception:
             continue
     return None
