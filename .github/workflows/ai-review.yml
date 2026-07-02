@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - "netscan/**/*.py"
+  workflow_dispatch:  # path filtresine takılmadan elle tetiklemek için
 
 # PR yorumu yazabilmek için yazma yetkisi
 permissions:
