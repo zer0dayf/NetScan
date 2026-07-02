@@ -10,5 +10,5 @@ urllib3
 fpdf2
 
 # Ek keşif modülleri
-pysnmp
+pysnmp>=7.0  # hlapi.v3arch.asyncio modül yolu 7.x'te geldi, eski sürümlerde yok
 zeroconf

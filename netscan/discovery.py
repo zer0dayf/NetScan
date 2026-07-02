@@ -5,6 +5,7 @@ DHCP dinleme, mDNS/Bonjour, NetBIOS, SNMP, UPnP/SSDP.
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -31,9 +32,11 @@ except ImportError:
 # ── Opsiyonel: pysnmp ────────────────────────────────────────────────────────
 
 try:
-    from pysnmp.hlapi import (
+    # pysnmp >= 7 hlapi tamamen asyncio tabanlı; senkron getCmd/nextCmd artık yok.
+    # Dışa açık fonksiyonlarımız senkron kalsın diye asyncio.run() ile sarıyoruz.
+    from pysnmp.hlapi.v3arch.asyncio import (
         CommunityData, ContextData, ObjectIdentity, ObjectType,
-        SnmpEngine, UdpTransportTarget, getCmd, nextCmd,
+        SnmpEngine, UdpTransportTarget, get_cmd, next_cmd,
     )
     SNMP_AVAILABLE = True
 except ImportError:
@@ -426,6 +429,30 @@ _SNMP_OIDS = {
 _SNMP_ARP_TABLE_OID = "1.3.6.1.2.1.4.22.1.3"  # ipNetToMediaNetAddress
 
 
+async def _snmp_walk_arp(ip: str, community: str, timeout: int) -> list[str]:
+    from pysnmp.hlapi.v3arch.asyncio import walk_cmd
+
+    engine = SnmpEngine()
+    target = await UdpTransportTarget.create((ip, 161), timeout=timeout, retries=0)
+    ips: list[str] = []
+    async for err_ind, err_status, _, var_binds in walk_cmd(
+        engine,
+        CommunityData(community, mpModel=0),
+        target,
+        ContextData(),
+        ObjectType(ObjectIdentity(_SNMP_ARP_TABLE_OID)),
+        lexicographicMode=False,
+        maxRows=MAX_SNMP_ARP_ENTRIES,
+    ):
+        if err_ind or err_status:
+            break
+        for _, val in var_binds:
+            addr = str(val).strip()
+            if addr and addr not in ips:
+                ips.append(addr)
+    return ips
+
+
 def snmp_arp_table(ip: str, community: str = "public", timeout: int = 1) -> list[str]:
     """
     SNMP ARP tablosunu (ipNetToMediaNetAddress) walk ederek cihazın gördüğü
@@ -433,51 +460,39 @@ def snmp_arp_table(ip: str, community: str = "public", timeout: int = 1) -> list
     """
     if not SNMP_AVAILABLE:
         return []
-    ips: list[str] = []
     try:
-        for err_ind, err_status, _, var_binds in nextCmd(
-            SnmpEngine(),
-            CommunityData(community, mpModel=0),
-            UdpTransportTarget((ip, 161), timeout=timeout, retries=0),
-            ContextData(),
-            ObjectType(ObjectIdentity(_SNMP_ARP_TABLE_OID)),
-            lexicographicMode=False,
-        ):
-            if err_ind or err_status:
-                break
-            for _, val in var_binds:
-                addr = str(val).strip()
-                if addr and addr not in ips:
-                    ips.append(addr)
-            if len(ips) >= MAX_SNMP_ARP_ENTRIES:
-                break
+        return asyncio.run(_snmp_walk_arp(ip, community, timeout))
     except Exception:
-        pass
-    return ips
+        return []
+
+
+async def _snmp_get_all(ip: str, community: str, timeout: int) -> dict:
+    engine = SnmpEngine()
+    target = await UdpTransportTarget.create((ip, 161), timeout=timeout, retries=0)
+    result: dict = {}
+    for key, oid in _SNMP_OIDS.items():
+        err_ind, err_status, _, var_binds = await get_cmd(
+            engine,
+            CommunityData(community, mpModel=0),
+            target,
+            ContextData(),
+            ObjectType(ObjectIdentity(oid)),
+        )
+        if not err_ind and not err_status:
+            for vb in var_binds:
+                val = str(vb[1]).strip()
+                if val:
+                    result[key] = val
+    return result
 
 
 def snmp_query(ip: str, community: str = "public", timeout: int = 1) -> dict | None:
     if not SNMP_AVAILABLE:
         return None
-    result: dict = {}
     try:
-        for key, oid in _SNMP_OIDS.items():
-            err_ind, err_status, _, var_binds = next(
-                getCmd(
-                    SnmpEngine(),
-                    CommunityData(community, mpModel=0),
-                    UdpTransportTarget((ip, 161), timeout=timeout, retries=0),
-                    ContextData(),
-                    ObjectType(ObjectIdentity(oid)),
-                )
-            )
-            if not err_ind and not err_status:
-                for vb in var_binds:
-                    val = str(vb[1]).strip()
-                    if val:
-                        result[key] = val
+        result = asyncio.run(_snmp_get_all(ip, community, timeout))
     except Exception:
-        pass
+        result = {}
 
     arp = snmp_arp_table(ip, community, timeout)
     if arp:
