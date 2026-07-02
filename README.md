@@ -23,7 +23,9 @@ A comprehensive LAN analysis tool — from ARP discovery and MAC vendor lookup t
 
 | Category | What It Detects |
 |---|---|
-| **Device Discovery** | ARP broadcast, 53K+ MAC vendor records (IEEE 24/28/36-bit) |
+| **Device Discovery** | ARP broadcast (with retry for flaky/sleeping Wi-Fi devices), 53K+ MAC vendor records (IEEE 24/28/36-bit) |
+| **Scan Targeting** | General (all local subnets), targeted internal CIDR/IP, or external domain/IP — auto-detected via `--target` |
+| **External Host Discovery** | Layered ICMP → TCP SYN ping → UDP ping for domains/public IPs (no ARP required), then the same detailed service scan |
 | **OS Detection** | TCP/IP stack fingerprint (TTL + window size), DHCP vendor class |
 | **HTTP Services** | Pi-hole, Proxmox VE, Nextcloud, WireGuard, Uptime Kuma, Portainer, Home Assistant, Plex, Jellyfin, Grafana, UniFi, AdGuard, and more |
 | **Streaming Devices** | Google Cast (Chromecast, Android TV, Google Home), Roku ECP |
@@ -32,6 +34,7 @@ A comprehensive LAN analysis tool — from ARP discovery and MAC vendor lookup t
 | **Apple Devices** | mDNS `_device-info` + 130+ Apple model table (iPhone/iPad/Mac/AppleTV/HomePod) |
 | **DHCP** | Passive listening — hostname, Android/Windows/iOS OS detection |
 | **Discovery Protocols** | UPnP/SSDP, mDNS/Bonjour, NetBIOS, SNMP (optional) |
+| **Internal-IP Leak Detection** | Passive, read-only: HTTP header/body regex scan, SNMP ARP table walk, UPnP-IGD port mapping enumeration |
 | **Export** | JSON, TXT, PDF (Unicode) |
 
 ### Installation
@@ -66,6 +69,12 @@ sudo python3 main.py --output report --format pdf
 # JSON output (for automation/CI)
 sudo python3 main.py --output scan --format json
 
+# Targeted internal scan — only this subnet, ARP-based
+sudo python3 main.py --target 192.168.1.0/24
+
+# External target — domain or public IP (host discovery + service scan, no ARP)
+sudo python3 main.py --target example.com
+
 # DHCP passive listener (capture newly connecting devices, Ctrl+C to stop)
 sudo python3 main.py --dhcp-only
 
@@ -79,11 +88,22 @@ sudo python3 main.py --update-db
 |---|---|---|
 | `--ports` | Comma-separated port list | Built-in wide port set |
 | `--timeout` | Port connection timeout (seconds) | `1.0` |
+| `--target`, `-t` | CIDR/IP of a local subnet (targeted internal scan) or a domain/public IP (external scan) | All local subnets |
 | `--output` | Output filename (no extension) | — |
 | `--format` | `json` / `txt` / `pdf` | Interactive prompt |
 | `--update-db` | Download and update IEEE OUI database | — |
 | `--dhcp-timeout` | DHCP listening duration (seconds) | `8` |
 | `--dhcp-only` | DHCP-only daemon mode | — |
+
+### Internal vs. External Scanning
+
+`--target` decides the mode automatically:
+
+- **No `--target`** → general internal scan, all locally attached subnets (unchanged default behavior).
+- **`--target` matches a locally attached subnet** (e.g. `192.168.1.0/24`, `10.0.0.5`) → targeted internal scan, ARP-based, restricted to that range only.
+- **`--target` is a domain or an IP/CIDR that isn't locally attached** (e.g. `example.com`, `8.8.8.8`) → external scan: DNS/CIDR resolution, then layered ICMP → TCP SYN ping → UDP ping host discovery (ARP doesn't work off-LAN), then the same detailed service-scan probes on hosts found alive. LAN-only protocols (ARP, DHCP passive sniff, mDNS, SSDP/UPnP) are skipped in this mode since they don't traverse the internet. External CIDR expansion is capped at 256 hosts for safety.
+
+> ⚠️ Only run an external scan against targets you are authorized to test.
 
 ### Project Structure
 
@@ -93,9 +113,10 @@ NetScan/
 │   ├── __init__.py        # Version and metadata
 │   ├── constants.py       # Favicon hashes, HTML/title signatures, Apple models
 │   ├── vendor.py          # MAC vendor DB loading, lookup, IEEE update
-│   ├── network.py         # Subnet discovery, ARP scanning
-│   ├── discovery.py       # DHCP, mDNS, NetBIOS, SNMP, UPnP/SSDP
-│   ├── fingerprint.py     # Banner, SMB, HTTP, TCP OS, Cast, WSD, IPP, Roku
+│   ├── network.py         # Subnet discovery, ARP scanning, target resolution
+│   ├── external.py        # External host discovery: DNS/CIDR resolve, ICMP/TCP-SYN/UDP ping
+│   ├── discovery.py       # DHCP, mDNS, NetBIOS, SNMP (+ ARP walk), UPnP/SSDP (+ IGD port mapping)
+│   ├── fingerprint.py     # Banner, SMB, HTTP (+ leak scan), TCP OS, Cast, WSD, IPP, Roku
 │   ├── scanner.py         # Per-device parallel probe orchestration
 │   ├── output.py          # Terminal output
 │   └── export.py          # JSON / TXT / PDF export
@@ -178,7 +199,9 @@ ARP keşfinden HTTP parmak izine, DHCP pasif dinlemeden Apple cihaz modeli tespi
 
 | Kategori | Neler Tespit Edilir |
 |---|---|
-| **Cihaz Keşfi** | ARP broadcast, 53K+ MAC vendor kaydı (IEEE 24/28/36-bit) |
+| **Cihaz Keşfi** | ARP broadcast (kararsız/uyuyan Wi-Fi cihazları için retry'lı), 53K+ MAC vendor kaydı (IEEE 24/28/36-bit) |
+| **Tarama Hedefleme** | Genel (tüm yerel subnet'ler), hedefli iç ağ CIDR/IP, veya dış ağ domain/IP — `--target` ile otomatik algılanır |
+| **Dış Ağ Host Discovery** | Domain/public IP'ler için katmanlı ICMP → TCP SYN ping → UDP ping (ARP gerekmez), ardından aynı detaylı servis taraması |
 | **OS Tespiti** | TCP/IP stack fingerprint (TTL + window size), DHCP vendor class |
 | **HTTP Servisleri** | Pi-hole, Proxmox VE, Nextcloud, WireGuard, Uptime Kuma, Portainer, Home Assistant, Plex, Jellyfin, Grafana, UniFi, AdGuard ve daha fazlası |
 | **Akış Cihazları** | Google Cast (Chromecast, Android TV, Google Home), Roku ECP |
@@ -187,6 +210,7 @@ ARP keşfinden HTTP parmak izine, DHCP pasif dinlemeden Apple cihaz modeli tespi
 | **Apple Cihazlar** | mDNS `_device-info` + 130+ Apple model tablosu (iPhone/iPad/Mac/AppleTV/HomePod) |
 | **DHCP** | Pasif dinleme — hostname, Android/Windows/iOS OS tespiti |
 | **Keşif Protokolleri** | UPnP/SSDP, mDNS/Bonjour, NetBIOS, SNMP (opsiyonel) |
+| **İç IP Sızıntısı Tespiti** | Pasif, salt okuma: HTTP header/body regex taraması, SNMP ARP tablosu walk'ı, UPnP-IGD port mapping enumerasyonu |
 | **Export** | JSON, TXT, PDF (Unicode) |
 
 ### Kurulum
@@ -221,12 +245,34 @@ sudo python3 main.py --output rapor --format pdf
 # JSON çıktısı
 sudo python3 main.py --output tarama --format json
 
+# Hedefli iç ağ taraması — sadece bu subnet, ARP tabanlı
+sudo python3 main.py --target 192.168.1.0/24
+
+# Dış ağ hedefi — domain veya public IP (host discovery + servis taraması, ARP yok)
+sudo python3 main.py --target example.com
+
 # DHCP pasif dinleyici (Ctrl+C ile dur)
 sudo python3 main.py --dhcp-only
 
 # Vendor DB güncelle
 sudo python3 main.py --update-db
 ```
+
+### Argümanlar
+
+| Argüman | Açıklama | Varsayılan |
+|---|---|---|
+| `--target`, `-t` | Yerel bir subnet'in CIDR/IP'si (hedefli iç ağ taraması) veya domain/public IP (dış ağ taraması) | Tüm yerel subnet'ler |
+
+### İç Ağ / Dış Ağ Taraması
+
+`--target` moda otomatik karar verir:
+
+- **`--target` verilmezse** → genel iç ağ taraması, tüm yerel arayüzler (mevcut varsayılan davranış).
+- **`--target` yerel bir arayüze denk geliyorsa** (ör. `192.168.1.0/24`, `10.0.0.5`) → hedefli iç ağ taraması, ARP tabanlı, sadece o aralıkla sınırlı.
+- **`--target` yerel olmayan bir domain/IP/CIDR ise** (ör. `example.com`, `8.8.8.8`) → dış ağ taraması: DNS/CIDR çözümleme, ardından katmanlı ICMP → TCP SYN ping → UDP ping ile host discovery (ARP internet üzerinden çalışmaz), ayakta bulunan hostlarda aynı detaylı servis tarama probları. LAN'a özgü protokoller (ARP, DHCP pasif dinleme, mDNS, SSDP/UPnP) bu modda çalıştırılmaz. Dış ağ CIDR genişletmesi güvenlik için 256 host ile sınırlıdır.
+
+> ⚠️ Dış ağ taramasını yalnızca test etme yetkin olan hedeflere karşı kullan.
 
 ### AI Test Pipeline
 
