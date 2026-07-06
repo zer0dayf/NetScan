@@ -28,7 +28,7 @@ from netscan.discovery import (
 from netscan.export import ask_export_format, ensure_ext, export_results
 from netscan.external import discover_alive_hosts, resolve_target
 from netscan.network import get_local_subnets, resolve_scan_target, scan_subnet
-from netscan.output import print_device
+from netscan.output import print_device, print_summary
 from netscan.scanner import scan_device
 from netscan.vendor import _load_mac_vendor_db, db_info, update_mac_vendor_db
 
@@ -163,6 +163,7 @@ def main() -> None:
 
     if not is_local:
         all_results = run_external_scan(target_norm, ports, args.timeout)
+        print_summary(all_results)
         if args.output:
             fmt  = args.fmt or ask_export_format()
             path = ensure_ext(args.output, fmt)
@@ -262,6 +263,9 @@ def main() -> None:
                 if d:
                     dev["dhcp_hostname"] = d.get("hostname")
                     dev["dhcp_os"]       = d.get("dhcp_os")
+
+    # ── Özet ──────────────────────────────────────────────────────────────────
+    print_summary(all_results)
 
     # ── Export ────────────────────────────────────────────────────────────────
     if args.output:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 
 def best_hostname(device: dict) -> str:
     """DHCP > DNS > NetBIOS önceliğiyle en iyi hostname'i döner."""
@@ -11,6 +13,49 @@ def best_hostname(device: dict) -> str:
         or device.get("netbios")
         or ""
     )
+
+
+def print_summary(all_results: list[dict]) -> None:
+    """Tarama sonunda toplam cihaz, üretici dağılımı ve açık servis özeti basar."""
+    devices = [d for sn in all_results for d in sn.get("devices", [])]
+    if not devices:
+        print("\n" + "=" * 90)
+        print("📊 ÖZET: Hiç aktif cihaz bulunamadı.")
+        print("=" * 90)
+        return
+
+    vendors: Counter = Counter()
+    port_hits: Counter = Counter()
+    web_apps: Counter = Counter()
+    identified = 0
+
+    for d in devices:
+        vendors[d.get("vendor") or "Bilinmeyen"] += 1
+        if d.get("hostname") or d.get("dhcp_hostname") or d.get("netbios") or d.get("device_model"):
+            identified += 1
+        for svc in d.get("ports", []):
+            port_hits[svc["port"]] += 1
+            if svc.get("type") == "http":
+                app = (svc.get("data") or {}).get("identified_as")
+                if app and app != "Bilinmeyen Web Uygulaması":
+                    web_apps[app] += 1
+
+    print("\n" + "=" * 90)
+    print(f"📊 ÖZET: {len(devices)} cihaz | {identified} tanımlı | "
+          f"{len(all_results)} alt ağ")
+    print("=" * 90)
+
+    top_vendors = ", ".join(f"{v} ({n})" for v, n in vendors.most_common(6))
+    print(f"  🏭 Üreticiler : {top_vendors}")
+
+    if port_hits:
+        top_ports = ", ".join(f"{p}×{n}" for p, n in
+                              sorted(port_hits.items(), key=lambda x: (-x[1], x[0]))[:10])
+        print(f"  🔌 Açık portlar: {top_ports}")
+
+    if web_apps:
+        apps = ", ".join(f"{a} ({n})" for a, n in web_apps.most_common(8))
+        print(f"  🌐 Web servisleri: {apps}")
 
 
 def print_device(r: dict) -> None:

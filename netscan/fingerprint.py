@@ -18,7 +18,9 @@ import requests
 from bs4 import BeautifulSoup
 from scapy.all import ICMP, IP, TCP, sr1
 
-from .constants import FAVICON_HASHES, HTML_SIGNATURES, TITLE_SIGNATURES
+from .constants import (
+    FAVICON_HASHES, HTML_SIGNATURES, TITLE_SIGNATURES, TLS_PREFERRED_PORTS,
+)
 
 # ── İç Ağ IP Sızıntısı ────────────────────────────────────────────────────────
 
@@ -114,10 +116,10 @@ def is_port_open(ip: str, port: int, timeout: float = 1.0) -> bool:
 
 # ── Banner Grabbing ───────────────────────────────────────────────────────────
 
-def banner_grabbing(ip: str, port: int) -> str | None:
+def banner_grabbing(ip: str, port: int, timeout: float = 1.0) -> str | None:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1.0)
+        s.settimeout(timeout)
         s.connect((ip, port))
         raw   = s.recv(1024)
         s.close()
@@ -130,7 +132,7 @@ def banner_grabbing(ip: str, port: int) -> str | None:
 
 # ── SMB ───────────────────────────────────────────────────────────────────────
 
-def smb_discovery(ip: str) -> str | None:
+def smb_discovery(ip: str, timeout: float = 1.5) -> str | None:
     smb_req = (
         b"\x00\x00\x00\x45\xff\x53\x4d\x42\x72\x00\x00\x00\x00\x18\x53\xc8"
         b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xfe"
@@ -139,7 +141,7 @@ def smb_discovery(ip: str) -> str | None:
     )
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1.5)
+        s.settimeout(timeout)
         s.connect((ip, 445))
         s.send(smb_req)
         res = s.recv(1024)
@@ -153,11 +155,14 @@ def smb_discovery(ip: str) -> str | None:
 
 # ── HTTP Parmak İzi ───────────────────────────────────────────────────────────
 
-def http_fingerprinting(ip: str, port: int) -> dict | None:
-    for proto in ("http", "https"):
+def http_fingerprinting(ip: str, port: int, timeout: float = 1.5) -> dict | None:
+    # TLS-only servislerde önce https dene — aksi halde http isteği boşuna
+    # timeout'a düşer veya TLS handshake baytları çöp title olarak parse edilir.
+    protos = ("https", "http") if port in TLS_PREFERRED_PORTS else ("http", "https")
+    for proto in protos:
         url = f"{proto}://{ip}:{port}"
         try:
-            resp  = requests.get(url, timeout=1.5, verify=False)
+            resp  = requests.get(url, timeout=timeout, verify=False)
             soup  = BeautifulSoup(resp.text, "html.parser")
             title = soup.title.string.strip() if soup.title else "Başlıksız"
 
@@ -188,7 +193,7 @@ def http_fingerprinting(ip: str, port: int) -> dict | None:
                 else urljoin(url, "/favicon.ico")
             )
             try:
-                fr = requests.get(fav_url, timeout=1.0, verify=False)
+                fr = requests.get(fav_url, timeout=timeout, verify=False)
                 if fr.status_code == 200:
                     fav_hash = mmh3.hash(codecs.encode(fr.content, "base64"))
                     if fav_hash in FAVICON_HASHES:
@@ -223,21 +228,21 @@ def probe_port(ip: str, port: int, timeout: float) -> dict | None:
         return None
 
     if port in (21, 22, 23):
-        data = banner_grabbing(ip, port)
+        data = banner_grabbing(ip, port, timeout)
         return {"type": "banner", "port": port, "data": data} if data else None
 
     if port == 445:
-        data = smb_discovery(ip)
+        data = smb_discovery(ip, timeout)
         return {"type": "smb", "port": port, "data": data} if data else None
 
     if port == 1883:
         return {"type": "mqtt", "port": port, "data": "MQTT Broker tespit edildi"}
 
     if port == 9100:
-        data = banner_grabbing(ip, port)
+        data = banner_grabbing(ip, port, timeout)
         return {"type": "jetdirect", "port": port, "data": data or "JetDirect Print Servisi"}
 
-    data = http_fingerprinting(ip, port)
+    data = http_fingerprinting(ip, port, timeout)
     return {"type": "http", "port": port, "data": data} if data else None
 
 

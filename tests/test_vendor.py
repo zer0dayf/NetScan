@@ -134,9 +134,10 @@ class TestGetMacVendor:
         assert result == "Apple, Inc."
 
     def test_locally_administered_mac(self, mock_vendor_db):
-        # İkinci bit set ise locally administered (örn: 7e:...)
+        # Locally-administered + unicast (0x02 set, 0x01 clear, örn: 7e:...) →
+        # OUI kaydı olamaz; rastgele/gizlilik MAC'i olarak etiketlenir.
         result = get_mac_vendor("7E:09:C3:43:BB:ED")
-        assert "Bilinmeyen" in result or "Sanal" in result
+        assert "Rastgele" in result
 
     def test_28bit_prefix_priority(self, monkeypatch):
         """28-bit MA-M kaydı, 24-bit MA-L kaydına göre öncelikli olmalı."""

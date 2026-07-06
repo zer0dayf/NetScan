@@ -100,7 +100,32 @@ def get_mac_vendor(mac: str | None) -> str:
         hit = _MAC_VENDOR_DB.get(full[:length])
         if hit:
             return hit
+
+    # OUI eşleşmedi: locally-administered bit set ise MAC büyük olasılıkla
+    # rastgeledir (iOS 14+/Android 10+ gizlilik MAC'i) — IEEE'ye kayıtlı değil.
+    if is_locally_administered(full):
+        return "🎲 Rastgele/Özel MAC (yerel yönetimli)"
     return "Bilinmeyen / Sanal Üretici"
+
+
+def is_locally_administered(mac: str | None) -> bool:
+    """
+    İlk oktette locally-administered (0x02) bit'i set VE unicast (0x01 clear) mi
+    kontrol eder. Set ise MAC IEEE'ye kayıtlı bir üreticiye ait değildir — modern
+    cihazlarda gizlilik amaçlı rastgele üretilmiş MAC'lerin ayırt edici işareti.
+    Broadcast/multicast adresler (ör. ff:ff:ff:...) gerçek cihaz MAC'i olmadığı
+    için hariç tutulur.
+    """
+    if not mac:
+        return False
+    hexdigits = mac.replace(":", "").replace("-", "").upper()
+    if len(hexdigits) < 2:
+        return False
+    try:
+        first_octet = int(hexdigits[:2], 16)
+    except ValueError:
+        return False
+    return bool(first_octet & 0x02) and not (first_octet & 0x01)
 
 
 def db_info() -> str:

@@ -45,25 +45,40 @@ TITLE_SIGNATURES: dict[str, str] = {
 }
 
 DEFAULT_PORTS: list[int] = [
-    21, 22, 23, 80, 443, 445,
+    21, 22, 23, 53, 80,
+    139,    # NetBIOS Session (SMB üzeri)
+    443, 445,
+    548,    # AFP (Apple File Sharing)
     631,    # IPP (yazıcılar)
     1400,   # Sonos
     1883,   # MQTT
+    2049,   # NFS
+    3000,   # Grafana / çeşitli
     3001,   # Uptime Kuma
+    3306,   # MySQL / MariaDB
+    3389,   # RDP (Windows Uzak Masaüstü)
     5000,   # Synology / çeşitli
     5357,   # WSD (Windows)
+    5432,   # PostgreSQL
+    5900,   # VNC
+    6379,   # Redis
     8006,   # Proxmox
     8008,   # Google Cast
     8009,   # Google Cast alt
     8060,   # Roku ECP
     8080,   # HTTP alternatif
     8123,   # Home Assistant
+    8443,   # HTTPS alternatif
     9100,   # JetDirect
     9443,   # HTTPS alternatif
     32400,  # Plex
     51821,  # WireGuard UI
     51832,  # WireGuard UI alt
 ]
+
+# HTTP parmak izinde önce https denenecek portlar (TLS-only servisler) —
+# aksi halde http isteği boşuna timeout'a düşer veya çöp döner.
+TLS_PREFERRED_PORTS: set[int] = {443, 8006, 8443, 9443, 32400}
 
 # Dış ağ TCP SYN ping'i için yaygın portlar (host discovery amaçlı)
 EXTERNAL_PING_PORTS: list[int] = [

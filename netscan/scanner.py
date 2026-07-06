@@ -61,7 +61,9 @@ def scan_device(
     with ThreadPoolExecutor(max_workers=8) as ex:
         f_host    = ex.submit(get_hostname, ip)
         f_tcp_os  = ex.submit(tcp_fingerprint, ip, open_ports)
-        f_ttl     = ex.submit(get_ttl_os_hint, ip)
+        # TTL probu ayrı bir ICMP round-trip; sadece açık port yokken (TCP
+        # fingerprint'in tek başına OS bilgisi veremeyeceği durum) baştan çalıştır.
+        f_ttl     = ex.submit(get_ttl_os_hint, ip) if not open_ports else None
         f_netbios = ex.submit(netbios_query, ip)
         f_snmp    = ex.submit(snmp_query, ip)
         f_cast = ex.submit(google_cast_probe, ip) if {8008, 8009} & set(open_ports) else None
@@ -70,7 +72,10 @@ def scan_device(
         f_roku = ex.submit(roku_probe, ip)          if 8060 in open_ports else None
 
         hostname  = f_host.result()
-        os_hint   = f_tcp_os.result() or f_ttl.result()
+        os_hint   = f_tcp_os.result()
+        if not os_hint:
+            # TCP fingerprint başarısız (SYN-ACK yakalanamadı vb.) → TTL'e düş.
+            os_hint = f_ttl.result() if f_ttl else get_ttl_os_hint(ip)
         netbios   = f_netbios.result()
         snmp_info = f_snmp.result()
         cast_info = f_cast.result() if f_cast else None
