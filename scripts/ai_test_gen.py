@@ -395,6 +395,74 @@ def fix_test_file(test_code: str, failures: list[dict], source: str) -> str:
     return call_ai(SYSTEM_FIX_FILE, user, max_tokens=8192)
 
 
+# ── Collection / sözdizimi hatası onarımı ─────────────────────────────────────
+
+_COLLECTION_ERROR_MARKERS = (
+    "during collection",
+    "errors during collection",
+    "Interrupted:",
+    "SyntaxError",
+    "IndentationError",
+    "ERROR ",  # pytest collection satırı: "ERROR path::..."
+)
+
+
+def is_collection_error(output: str) -> bool:
+    """
+    pytest çıktısının bir collection/sözdizimi hatası (üretilen dosya hiç
+    import/parse edilemedi) olup olmadığını anlar. Bu durumda ortada hiç
+    'FAILED' satırı olmaz — hata kaynak kodda değil, AI'nin ürettiği dosyada
+    (kapanmayan string, bozuk decorator, hatalı mock hedefi vb.) demektir.
+    """
+    return any(marker in output for marker in _COLLECTION_ERROR_MARKERS)
+
+
+SYSTEM_FIX_SYNTAX = textwrap.dedent("""
+    Sen bir senior Python test mühendisisin. Ürettiğin pytest test dosyası hiç
+    çalıştırılamadı çünkü pytest onu TOPLAYAMADI (collection error) — dosyada bir
+    sözdizimi/import hatası var (ör. kapanmayan string literal, bozuk @patch
+    decorator, hatalı girinti, geçersiz mock hedefi). Bu bir kaynak-kod bug'ı
+    DEĞİL; sadece test dosyasının kendisi bozuk.
+
+    KURALLAR:
+    - Testlerin ORİJİNAL amacını koru; sadece dosyayı geçerli hale getir.
+    - Dönen dosya baştan sona geçerli, tek parça, collectlenebilir bir Python
+      dosyası olmalı — parça/snippet değil, TÜM dosya.
+    - @patch/@patch.dict gibi decorator'ları doğru sözdizimiyle yaz.
+    - Gerekli tüm import'lar dosyanın başında tek sefer bulunmalı.
+    - SADECE geçerli Python kodu döndür, açıklama metni yazma.
+""").strip()
+
+
+def fix_syntax_file(test_code: str, pytest_output: str, source: str) -> str:
+    """
+    Collection/sözdizimi hatası veren üretilmiş test dosyasını, pytest'in
+    verdiği hata mesajı bağlamında geçerli ve collectlenebilir tam bir dosyaya
+    dönüştürür.
+    """
+    error_excerpt = "\n".join(pytest_output.splitlines()[-40:])
+    user = textwrap.dedent(f"""
+        ## BOZUK TEST DOSYASI (TAMAMI)
+        ```python
+        {test_code}
+        ```
+
+        ## PYTEST COLLECTION HATASI
+        ```
+        {error_excerpt}
+        ```
+
+        ## KAYNAK KOD (referans için)
+        ```python
+        {source[:6000]}
+        ```
+
+        Yukarıdaki dosyanın sözdizimi/collection hatasını düzelt. Düzeltilmiş
+        TAM dosyayı ```python ... ``` bloğu içinde döndür.
+    """).strip()
+    return call_ai(SYSTEM_FIX_SYNTAX, user, max_tokens=8192)
+
+
 # ── Bug raporu ────────────────────────────────────────────────────────────────
 
 def write_bug_report(bugs: list[dict], test_file: Path) -> Path:
@@ -499,6 +567,29 @@ def main() -> int:
     print("\n🧪 pytest çalışıyor...")
     exit_code, output = run_pytest(test_file)
     print(output)
+
+    # ── 4b. Collection/sözdizimi hatası: üretilen dosya bozuk (kaynak bug değil) ─
+    # 'FAILED' satırı yokken pytest yine de fail ettiyse dosya hiç toplanamamış
+    # demektir; AI ile sözdizimini onarıp tekrar dene, olmazsa dosyayı at.
+    syntax_attempts = 0
+    while exit_code != 0 and not parse_failures(output) and is_collection_error(output):
+        if syntax_attempts >= 2:
+            print("⚠️  Üretilen test dosyası onarılamadı (sözdizimi/collection hatası).")
+            print("   Bu bir kaynak-kod bug'ı değil — dosya atlanıyor.")
+            test_file.unlink(missing_ok=True)
+            return 0
+        syntax_attempts += 1
+        print(f"\n🔧 Collection/sözdizimi hatası — AI ile onarılıyor "
+              f"(deneme {syntax_attempts}/2)...")
+        fixed_code = extract_python_block(fix_syntax_file(test_code, output, source))
+        if not fixed_code or "def test_" not in fixed_code:
+            print("⚠️  Onarılmış dosya alınamadı — dosya atlanıyor.")
+            test_file.unlink(missing_ok=True)
+            return 0
+        test_code = fixed_code
+        test_file.write_text(header + "\n\n" + test_code, encoding="utf-8")
+        exit_code, output = run_pytest(test_file)
+        print(output)
 
     if exit_code == 0:
         print("✅ Tüm testler geçti.")
