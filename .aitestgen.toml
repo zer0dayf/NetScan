@@ -1,0 +1,24 @@
+# Configuration for scripts/ai_testgen.py — the portable AI test-review tool.
+# Copy this file (and scripts/ai_testgen.py + .github/workflows/ai-testgen.yml)
+# into any repo and edit the fields below. Anything omitted falls back to the
+# language preset; env vars (AITG_*) override everything.
+
+language    = "python"              # preset key: python | javascript | go (or add your own)
+framework   = "pytest"
+project     = "NetScan — LAN & service scanner"
+
+# Which source files to watch (git pathspec glob, relative to repo root).
+source_glob = "netscan/**/*.py"
+
+# Where generated tests are written, and their file extension.
+test_dir    = "tests/generated"
+test_ext    = ".py"
+
+# What to mock so tests never touch the real network.
+mock_libs   = "unittest.mock (mock out socket, scapy, requests, filesystem)"
+
+# Command to run the generated test file. Placeholders: {py} {test_path} {test_dir}
+run_cmd     = ["{py}", "-m", "pytest", "{test_path}", "-q", "--tb=short", "--no-header"]
+
+# Command the workflow runs to install project + test deps.
+install     = "pip install -r requirements.txt pytest"
